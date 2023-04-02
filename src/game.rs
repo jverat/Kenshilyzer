@@ -1,4 +1,5 @@
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, BufRead, Read};
+use std::io;
 use std::process::{Command, Stdio, Child, ExitStatus};
 use std::sync::mpsc;
 use std::thread;
@@ -17,6 +18,7 @@ pub fn run(duration: Duration, kenshi_file: String, game_state_channel: (mpsc::S
 
     // Enviar actualizaciones de estado a través del canal
     loop {
+        todo!();
         
     }
 }
@@ -25,7 +27,12 @@ fn execute_cmd(cmd: &mut Command, duration: Duration, game_state_channel: (mpsc:
     let mut child = cmd.spawn().expect("Error executing Kenshi!");
     std::thread::sleep(duration);
     loop {
-        thread::spawn(|| watch(&mut child, game_state_channel.0));
+        if let Ok(kenshi_status_option) = child.try_wait() {
+            if let Some(kenshi_status) = kenshi_status_option {
+
+            }
+        }
+        let watcher = thread::spawn(|| watch(&mut child, game_state_channel.0));
         match game_state_channel.1.recv() {
             Ok(kenshi_status) => {
                 match kenshi_status {
@@ -34,10 +41,37 @@ fn execute_cmd(cmd: &mut Command, duration: Duration, game_state_channel: (mpsc:
                         wait_for_modlist(modlist_state_receiver);
                         break;
                     },
-                    State::Working => {}
+                    State::Working => {
+                        child.wait();
+                        continue;
+                    }
                 }
             },
-            Err(e) => println!("Error while listening to Kenshi!: {}", e),
+            Err(e) => {
+                game_state_channel.0.send(State::Failed(Error::new(ErrorKind::BrokenPipe, "Error while listening to Kenshi!")));
+                loop{
+                    todo!();
+                    println!("Channel having issues reading Kenshi state, do you want to kill de whole thing? (y/n)");
+                    let mut input: String;
+                    if let Err(e) = io::stdin().lock().take(8).read_line(&mut input) {
+                        println!("Error reading your input!: {}", e);
+                        continue;
+                    }
+                    match input.trim().to_lowercase().as_str() {
+                        "y" => {
+                            child.kill();
+                            child.wait();
+                            watcher.join();
+                        },
+                        "n" => break,
+                        _ => {
+                            println!("Invalid entry (y/n)");
+                            input.clear();
+                            continue;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -77,7 +111,7 @@ fn wait_for_modlist(modlist_state_receiver: mpsc::Receiver<State>) -> Option<Err
                         return Some(e);
                     },
                     State::Working => {
-                        thread::sleep(Duration::from_secs(5));
+                        thread::sleep(Duration::from_secs(3));
                         continue;
                     }
                 }

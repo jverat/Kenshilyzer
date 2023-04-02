@@ -9,7 +9,6 @@ use dotenv::dotenv;
 
 mod game;
 mod mod_list;
-mod search;
 
 pub enum State {
     Working,
