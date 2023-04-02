@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::{BufReader, BufRead, Error};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -11,19 +11,12 @@ mod game;
 mod mod_list;
 mod search;
 
-fn read_file(path: String) -> Option<Vec<String>> {
-    let file = File::open(path);
-    if let Ok(f) = file {
-        let reader = BufReader::new(f);
-        let vec: Vec<String> = reader.lines()
-                                     .into_iter()
-                                     .filter_map(|x| Some(x.unwrap()))
-                                     .collect();
-        Some(vec)
-    } else {
-        None
-    }
+pub enum State {
+    Working,
+    Closed,
+    Failed(Error)
 }
+
 
 fn main() {
     // Cargar las variables de entorno desde el archivo .env
@@ -31,32 +24,22 @@ fn main() {
 
     // Leer las variables de entorno
     let mods_file = env::var("MODS_FILE").unwrap();
-    let duration = env::var("DURATION").unwrap().parse::<u64>().unwrap();
+    let kenshi_file = env::var("KENSHI_EXE").unwrap();
+    let duration = Duration::from_secs(env::var("DURATION").unwrap().parse::<u64>().unwrap());
 
-    let mods: Vec<String> = read_file(mods_file).unwrap();
+
+
     // Crear un canal para comunicarse con la función concurrente
-    let (sender, receiver) = mpsc::channel();
+    let game_state_channel      = mpsc::channel();
+    let modlist_state_channel   = mpsc::channel();
 
-    // Ejecutar la función concurrente en un hilo separado
-    let game_handle = thread::spawn(move || game::run(duration, sender));
+    // Ejecutar el gestor de la modlist en otro hilo
+    let modlist_handle = thread::spawn(move || mod_list::start(mods_file, modlist_state_channel, game_state_channel.1));
 
-    // Escuchar las actualizaciones de estado del canal y actualizar la interfaz de usuario
-    loop {
-        match receiver.recv() {
-            Ok(i) => {
-                // Actualizar la interfaz de usuario con el estado actual
-                // ...
+    // Ejecutar el juego en un hilo separado
+    let game_handle = thread::spawn(move || game::run(duration, kenshi_file, game_state_channel, modlist_state_channel.1));
 
-                if i == -1 {
-                    // La función concurrente ha terminado, salir del bucle
-                    break;
-                }
-            }
-            Err(_) => {
-                // Se produjo un error en el canal, salir del bucle
-                break;
-            }
-        }
-    }
+    
+    todo!();
     game_handle.join().unwrap();
 }
