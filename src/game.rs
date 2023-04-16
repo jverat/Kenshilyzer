@@ -1,4 +1,5 @@
 use std::io::{Error, ErrorKind, BufRead, Read, stdin};
+use std::path::Path;
 use std::process::{Command, Child};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
@@ -6,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::State;
 
-pub fn run(duration: Duration, kenshi_file: String, game_state_channel: (mpsc::Sender<State>, mpsc::Receiver<State>), modlist_state_receiver: mpsc::Receiver<State>) {
+pub fn run(duration: Duration, kenshi_file: &Path, game_state_channel: (mpsc::Sender<State>, mpsc::Receiver<State>), modlist_state_receiver: mpsc::Receiver<State>) {
     // Crear el comando para ejecutar el juego con Wine
     let iterations = 0;
     let cmd = Command::new("wine")
@@ -23,19 +24,20 @@ pub fn run(duration: Duration, kenshi_file: String, game_state_channel: (mpsc::S
 }
 
 fn execute_cmd(cmd: &mut Command, duration: Duration, game_state_channel: (mpsc::Sender<State>, mpsc::Receiver<State>), modlist_state_receiver: mpsc::Receiver<State>) {
+    // Se ejecuta el comando, se duerme el hilo padre lo que determinen los parametros del programa y cuando pasa este tiempo
     let mut child = cmd.spawn().expect("Error executing Kenshi!");
     std::thread::sleep(duration);
-    let synchronizer = mpsc::channel::<bool>();
+    let synchronizer = mpsc::channel::<()>();
     let watcher = thread::spawn(|| watch(&mut child, game_state_channel.0, synchronizer.1));
     loop {
-        synchronizer.0.send(true);
+        synchronizer.0.send(());
         match game_state_channel.1.recv() {
             Ok(kenshi_status) => {
                 match kenshi_status {
                     State::Off => break,
                     State::Failed(_) => {
                         // implement a timeout?
-                        wait_for_modlist(modlist_state_receiver);
+                        wait_for_modlist(modlist_state_receiver, 360);
                         break;
                     },
                     State::Working => {
@@ -71,29 +73,32 @@ fn execute_cmd(cmd: &mut Command, duration: Duration, game_state_channel: (mpsc:
     }
 }
 
-fn watch(child: &mut Child, sender: mpsc::Sender<State>, synchronizer: mpsc::Receiver<bool>) {
-    for _ in synchronizer {
-        match child.try_wait() {
-            Ok(kenshi_status) => {
-                match kenshi_status {
-                    Some(status) => {
-                            println!("Kenshi has finished up with status {}", status);
-                            sender.send(State::Off);
-                            //Ok(kenshi_status)
-                        },
-                    None => {
-                            println!("Process surviving!");
-                            sender.send(State::Working);
-                            //Ok(None)
-                        }
-                }
-            },
-            Err(e) => {
-                println!("Kenshi finished up with error: {}", e);
-                sender.send(State::Failed(e));
-                //Err(e)
+fn watch(child: &mut Child, sender: mpsc::Sender<State>, synchronizer: mpsc::Receiver<()>) {
+    synchronizer.try_iter()
+                .for_each(|_: ()| { sender.send(peek(child)); });
+}
+
+fn peek(child: &mut Child) -> State {
+    match child.try_wait() {
+        Ok(kenshi_status) => {
+            match kenshi_status {
+                Some(status) => {
+                        println!("Kenshi has finished up with status {}", status);
+                        State::Off
+                        //Ok(kenshi_status)
+                    },
+                None => {
+                        println!("Process surviving!");
+                        State::Working
+                        //Ok(None)
+                    }
             }
-        }
+        },
+        Err(e) => {
+            println!("Kenshi finished up with error: {}", e);
+            State::Failed(e)
+            //Err(e)
+        },
     }
 }
 
